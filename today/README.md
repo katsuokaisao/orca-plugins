@@ -15,6 +15,7 @@
 | 決めごと | 理由 |
 |---|---|
 | タブの一覧を `orca worktree ps --json` から読む（`src/folders.ts`） | プラグインの API の Agent Session History（`agent.listSessions`）は、セッションを起動したディレクトリでワークスペースに結び付ける。同じディレクトリを指すフォルダーワークスペースが複数あると、全部のタブが最初のフォルダーに寄る。待機中のタブも出ない。`agents.list` は今開いているワークスペースしか見られない |
+| タブの開閉・名前・状態は 10 秒ごとに `orca worktree ps` を読み直して拾い、変わったときだけパネルと件数を更新する | チャットのタブを閉じても届くイベントが無い。`agent.status.changed` は端末のペイン向けで、`workspace.changed` はフォーカス中のワークスペースの端末しか知らせない。1 回の読み直しは 0.3 秒ほど |
 | タブを選んでもフォルダーまでしか開かない | チャットのタブは端末ではないので `terminal.focus` も `orca terminal switch` も使えない。本家の [#39847](https://github.com/stablyai/orca/issues/39847)（プラグインと CLI からチャットのタブに切り替える）か [#43874](https://github.com/stablyai/orca/issues/43874)（チャットのタブへの `orca://` リンク）が入ったら直す |
 | サイドバーのカードやタブに印を出さない | プラグインの API に、サイドバーに描く手段が無い |
 

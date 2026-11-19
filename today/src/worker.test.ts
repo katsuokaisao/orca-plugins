@@ -89,6 +89,43 @@ test('marks of closed tabs and of earlier days are not counted', async () => {
   await old.deactivate()
 })
 
+/** Polls `check` until it holds; the worker's timer runs on real time in these tests. */
+async function until(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the worker')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+test('closing a marked tab lowers the count and tells open panels, without a request', async () => {
+  let open = folders
+  const h = host({ marks: { date: '2026-11-19', ids: ['pane:a2'] } })
+  const worker = await mountWorker(
+    { default: createWorker(morning, async () => open, 10), deactivate },
+    { host: h }
+  )
+  const counts = () => (h.callsOf('statusBar.update') as { text: string }[]).map((u) => u.text)
+  await until(() => counts().includes('★ 今日 1'))
+
+  open = folders.map((f) => ({ ...f, tabs: f.tabs.filter((t) => t.id !== 'pane:a2') }))
+  await until(() => worker.posts.length > 0)
+
+  assert.equal(counts()[counts().length - 1], '★ 今日 0')
+  assert.deepEqual((worker.posts[0].payload as Snap).marks, [])
+  await worker.deactivate()
+})
+
+test('nothing is posted while the tabs stay the same', async () => {
+  const worker = await mountWorker(
+    { default: createWorker(morning, read, 10), deactivate },
+    { host: host() }
+  )
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(worker.posts.length, 0)
+  await worker.deactivate()
+})
+
 test('opening asks Orca to show the folder workspace', async () => {
   const h = host()
   const worker = await mounted(h)

@@ -7,14 +7,17 @@ import { readFolders, type FolderRow } from './folders'
 
 const MARKS = 'marks'
 const STATUS_ITEM = 'today-count'
-const DAY_CHECK_MS = 60_000
+// Orca sends no event when a chat tab closes (they are not terminals, and `workspace.changed`
+// only covers the focused workspace), so the worker reads the tabs again on a timer. One read of
+// `orca worktree ps` takes about 0.3 s.
+const POLL_MS = 10_000
 
 type Marks = { date: string; ids: string[] }
 
-let dayTimer: ReturnType<typeof setInterval> | undefined
+let pollTimer: ReturnType<typeof setInterval> | undefined
 
 export function deactivate(): void {
-  clearInterval(dayTimer)
+  clearInterval(pollTimer)
 }
 
 /** The calendar day in Tokyo, so marks made late at night still belong to that day. */
@@ -71,14 +74,17 @@ async function showCount(orca: OrcaWorkerApi, count: number): Promise<void> {
 
 export function createWorker(
   now: () => Date = () => new Date(),
-  read: () => Promise<FolderRow[]> = readFolders
+  read: () => Promise<FolderRow[]> = readFolders,
+  pollMs: number = POLL_MS
 ) {
   return function activate(orca: OrcaWorkerApi): void {
-    let lastDay = dayOf(now())
+    /** The last snapshot open panels were given, so the timer posts only what changed. */
+    let lastSent = ''
 
     const refresh = async () => {
       const snap = await snapshot(orca, now, read)
       await showCount(orca, snap.marks.length)
+      lastSent = JSON.stringify(snap)
       return snap
     }
 
@@ -108,14 +114,24 @@ export function createWorker(
       return { opened: result.opened }
     })
 
-    // The day can turn over while Orca stays open; clear the count and tell open panels then.
-    clearInterval(dayTimer)
-    dayTimer = setInterval(() => {
-      const day = dayOf(now())
-      if (day === lastDay) return
-      lastDay = day
-      void refresh().then((snap) => orca.panels.post('today.changed', snap))
-    }, DAY_CHECK_MS)
+    // Picks up tabs closed, opened or renamed, their states, and the day turning over. A read
+    // slower than the interval is not stacked on.
+    let polling = false
+    const poll = async () => {
+      if (polling) return
+      polling = true
+      try {
+        const before = lastSent
+        const snap = await refresh()
+        if (lastSent !== before) orca.panels.post('today.changed', snap)
+      } catch (error) {
+        orca.log(`refresh failed: ${String(error)}`)
+      } finally {
+        polling = false
+      }
+    }
+    clearInterval(pollTimer)
+    pollTimer = setInterval(() => void poll(), pollMs)
 
     void refresh().catch((error) => orca.log(`first refresh failed: ${String(error)}`))
   }
