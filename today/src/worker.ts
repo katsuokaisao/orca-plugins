@@ -1,0 +1,124 @@
+// Keeps which chat tabs of folder workspaces are marked for today. Orca has no API for drawing on
+// the left sidebar's cards, so the marks live in this plugin's storage and show in its own panel
+// and status bar item.
+// The worker restarts on save and drops memory, so everything that must last is in storage.
+import type { OrcaWorkerApi } from 'orca/worker'
+import { readFolders, type FolderRow } from './folders'
+
+const MARKS = 'marks'
+const STATUS_ITEM = 'today-count'
+const DAY_CHECK_MS = 60_000
+
+type Marks = { date: string; ids: string[] }
+
+let dayTimer: ReturnType<typeof setInterval> | undefined
+
+export function deactivate(): void {
+  clearInterval(dayTimer)
+}
+
+/** The calendar day in Tokyo, so marks made late at night still belong to that day. */
+export function dayOf(now: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now)
+}
+
+/** Marks from an earlier day count as none: that is what clears them each morning. */
+async function readIds(orca: OrcaWorkerApi, date: string): Promise<string[]> {
+  const value = await orca.storage.get(MARKS)
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return []
+  const stored = value as { date?: unknown; ids?: unknown }
+  if (stored.date !== date || !Array.isArray(stored.ids)) return []
+  return stored.ids.filter((id): id is string => typeof id === 'string')
+}
+
+async function writeIds(orca: OrcaWorkerApi, marks: Marks): Promise<void> {
+  await orca.storage.set(MARKS, marks)
+}
+
+/**
+ * Parent sessions run as chat tabs of folder workspaces; worktrees hold the workers they start,
+ * so only folder workspaces are listed, in Orca's order, each with its tabs in Orca's order.
+ */
+async function snapshot(orca: OrcaWorkerApi, now: () => Date, read: () => Promise<FolderRow[]>) {
+  const date = dayOf(now())
+  const ids = await readIds(orca, date)
+  const folders = (await read()).map((f) => ({
+    ...f,
+    tabs: f.tabs.map((t) => ({ ...t, marked: ids.includes(t.id) }))
+  }))
+  // A mark whose tab was closed is left out, so the count matches what the panel shows.
+  const open = new Set(folders.flatMap((f) => f.tabs.map((t) => t.id)))
+  return { date, folders, marks: ids.filter((id) => open.has(id)) }
+}
+
+async function showCount(orca: OrcaWorkerApi, count: number): Promise<void> {
+  // The status bar is only a hint; a refusal (no desktop app) must not break the panel.
+  try {
+    await orca.host.call('statusBar.update', {
+      id: STATUS_ITEM,
+      text: `★ 今日 ${count}`,
+      tone: count > 0 ? 'accent' : 'neutral'
+    })
+  } catch (error) {
+    orca.log(`status bar not updated: ${String(error)}`)
+  }
+}
+
+export function createWorker(
+  now: () => Date = () => new Date(),
+  read: () => Promise<FolderRow[]> = readFolders
+) {
+  return function activate(orca: OrcaWorkerApi): void {
+    let lastDay = dayOf(now())
+
+    const refresh = async () => {
+      const snap = await snapshot(orca, now, read)
+      await showCount(orca, snap.marks.length)
+      return snap
+    }
+
+    orca.panels.handle('today.snapshot', () => refresh())
+
+    orca.panels.handle('today.toggle', async ({ id }) => {
+      const date = dayOf(now())
+      const ids = await readIds(orca, date)
+      if (!ids.includes(id)) {
+        const current = await snapshot(orca, now, read)
+        const isTab = current.folders.some((f) => f.tabs.some((t) => t.id === id))
+        if (!isTab) {
+          throw Object.assign(new Error(`not an open tab of a folder workspace: ${id}`), {
+            code: 'invalid_params'
+          })
+        }
+      }
+      const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
+      await writeIds(orca, { date, ids: next })
+      const snap = await refresh()
+      orca.panels.post('today.changed', snap)
+      return snap
+    })
+
+    orca.panels.handle('today.open', async ({ id }) => {
+      const result = await orca.host.call('workspace.open', { workspaceId: id })
+      return { opened: result.opened }
+    })
+
+    // The day can turn over while Orca stays open; clear the count and tell open panels then.
+    clearInterval(dayTimer)
+    dayTimer = setInterval(() => {
+      const day = dayOf(now())
+      if (day === lastDay) return
+      lastDay = day
+      void refresh().then((snap) => orca.panels.post('today.changed', snap))
+    }, DAY_CHECK_MS)
+
+    void refresh().catch((error) => orca.log(`first refresh failed: ${String(error)}`))
+  }
+}
+
+export default createWorker()

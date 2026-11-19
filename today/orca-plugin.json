@@ -1,0 +1,39 @@
+{
+  "manifestVersion": 2,
+  "id": "today",
+  "name": "今日やる",
+  "version": "0.1.0",
+  "description": "フォルダーワークスペースのタブのうち今日やるものに印を付け、右のサイドバーに一覧にする。",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "today",
+        "title": "今日やる",
+        "icon": "star",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "today-count",
+        "text": "★ 今日 0",
+        "icon": "star"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:write"
+    }
+  ]
+}
