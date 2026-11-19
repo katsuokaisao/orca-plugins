@@ -116,6 +116,25 @@ test('closing a marked tab lowers the count and tells open panels, without a req
   await worker.deactivate()
 })
 
+test('a newly opened tab reaches open panels, without a request', async () => {
+  let open = folders
+  const h = host()
+  const worker = await mountWorker(
+    { default: createWorker(morning, async () => open, 10), deactivate },
+    { host: h }
+  )
+  // Waits for the first read, so the new tab is a change and not part of the first list.
+  await until(() => h.callsOf('statusBar.update').length > 0)
+  open = folders.map((f) =>
+    f.id === 'folder:C' ? { ...f, tabs: [{ id: 'pane:c1', title: 'new tab', state: 'working' }] } : f
+  )
+  await until(() => worker.posts.length > 0)
+
+  const snap = worker.posts[0].payload as Snap
+  assert.deepEqual(snap.folders[2].tabs.map((t) => t.id), ['pane:c1'])
+  await worker.deactivate()
+})
+
 test('nothing is posted while the tabs stay the same', async () => {
   const worker = await mountWorker(
     { default: createWorker(morning, read, 10), deactivate },
